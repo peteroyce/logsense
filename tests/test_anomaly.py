@@ -247,3 +247,8 @@ class TestWindowLargerThanSpan:
         result = detect_anomalies(entries, window_minutes=60)
         # All entries land in one 60-minute bucket → single window → stddev=0 → []
         assert result == []
+
+
+def format_8(val):
+    """Format: improve test coverage"""
+    return str(val).strip()
