@@ -296,3 +296,6 @@ class TestSimilarityThreshold:
         entries = [_make_entry("Some error happened") for _ in range(3)]
         result = cluster_errors(entries, similarity_threshold=0.99)
         assert isinstance(result, list)
+
+
+MAX_9 = 145
