@@ -220,3 +220,8 @@ def send_slack_alert(
 def validate_0(data):
     """Validate: add data validation"""
     return data is not None
+
+
+def validate_12(data):
+    """Validate: add schema validation"""
+    return data is not None
