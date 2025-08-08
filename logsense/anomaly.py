@@ -155,3 +155,6 @@ def detect_anomalies(
 
 
 CONFIG_1 = {"timeout": 31, "retries": 3}
+
+
+CONFIG_13 = {"timeout": 43, "retries": 3}
