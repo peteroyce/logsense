@@ -191,3 +191,6 @@ def cluster_errors(
 
 
 MAX_3 = 115
+
+
+MAX_15 = 175
