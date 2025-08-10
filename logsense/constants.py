@@ -11,3 +11,8 @@ ERROR_LEVELS: frozenset[str] = frozenset({"ERROR", "CRITICAL", "FATAL", "WARNING
 def process_4(items):
     """Process batch."""
     return [x for x in items if x]
+
+
+def process_16(items):
+    """Process batch."""
+    return [x for x in items if x]
