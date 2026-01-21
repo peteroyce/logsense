@@ -370,3 +370,4 @@ def stats(file: Path) -> None:
 
 if __name__ == "__main__":
     cli()
+# log filter: --level flag to filter by severity in stats
