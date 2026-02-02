@@ -13,6 +13,11 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+# Sentinel object returned by send_slack_alert when no webhook URL is configured.
+# Callers can distinguish "not configured" (NO_WEBHOOK) from "configured but
+# failed" (False) and "succeeded" (True).
+NO_WEBHOOK = object()
+
 _SEVERITY_EMOJI = {
     "critical": ":red_circle:",
     "warning": ":large_yellow_circle:",
@@ -151,7 +156,7 @@ def send_slack_alert(
     summary: dict,
     *,
     timeout: float = 10.0,
-) -> bool:
+) -> object:
     """
     Send a formatted Slack alert for *anomalies*.
 
@@ -168,11 +173,18 @@ def send_slack_alert(
 
     Returns
     -------
-    True if the message was delivered successfully (HTTP 200), False otherwise.
+    NO_WEBHOOK
+        The module-level sentinel when *webhook_url* is empty/None — the caller
+        should silently skip (no warning needed; the webhook was never set up).
+    True
+        Message delivered successfully (HTTP 200 "ok").
+    False
+        Webhook is configured but the request failed (network error, bad status,
+        timeout) — the caller should warn the user.
     """
     if not webhook_url:
-        logger.warning("send_slack_alert called with empty webhook_url — skipping")
-        return False
+        logger.debug("send_slack_alert called with empty webhook_url — skipping silently")
+        return NO_WEBHOOK
 
     if not anomalies:
         logger.debug("No anomalies to report — skipping Slack alert")

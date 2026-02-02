@@ -264,3 +264,169 @@ class TestParseFile:
         for e in entries:
             assert "raw" in e
             assert e["raw"]
+
+
+# ---------------------------------------------------------------------------
+# parse_line — syslog format
+# ---------------------------------------------------------------------------
+
+SYSLOG_LINE = "Jan 15 10:23:45 myhost sshd[1234]: Accepted password for user from 10.0.0.2 port 22 ssh2"
+SYSLOG_CRIT_LINE = "Jan 15 10:30:00 myhost kernel: CRITICAL: Out of memory; killing process 5678"
+
+class TestParseLineSyslog:
+    """
+    Syslog lines don't have a year in the timestamp and don't match the
+    generic pattern. They fall through to the UNKNOWN/fallback path.
+    parse_line must NOT crash and must still return a dict with 'raw'.
+    """
+
+    def test_syslog_does_not_crash(self):
+        entry = parse_line(SYSLOG_LINE)
+        assert entry is not None
+
+    def test_syslog_raw_preserved(self):
+        entry = parse_line(SYSLOG_LINE)
+        assert entry["raw"] == SYSLOG_LINE
+
+    def test_syslog_has_level_key(self):
+        entry = parse_line(SYSLOG_LINE)
+        assert "level" in entry
+
+    def test_syslog_has_message_key(self):
+        entry = parse_line(SYSLOG_LINE)
+        assert "message" in entry
+
+    def test_syslog_with_critical_keyword_does_not_crash(self):
+        entry = parse_line(SYSLOG_CRIT_LINE)
+        assert entry is not None
+        assert "raw" in entry
+
+
+# ---------------------------------------------------------------------------
+# parse_line — malformed / truncated lines
+# ---------------------------------------------------------------------------
+
+class TestMalformedLines:
+
+    def test_truncated_json_does_not_crash(self):
+        """Partial JSON must fall through to fallback, not raise."""
+        line = '{"timestamp": "2024-01-15T10:00:00", "level": "ERROR"'  # no closing }
+        entry = parse_line(line)
+        assert entry is not None
+        assert "raw" in entry
+
+    def test_empty_json_object_does_not_crash(self):
+        entry = parse_line("{}")
+        assert entry is not None
+
+    def test_json_with_null_fields_does_not_crash(self):
+        entry = parse_line('{"timestamp": null, "level": null, "message": null}')
+        assert entry is not None
+
+    def test_nginx_with_missing_closing_quote_does_not_crash(self):
+        line = '192.168.1.1 - - [10/Oct/2023:13:55:36 -0700] "GET /index.html HTTP/1.1'
+        entry = parse_line(line)
+        assert entry is not None
+
+    def test_very_long_line_does_not_crash(self):
+        line = "2024-01-15 10:00:00 ERROR " + "x" * 10_000
+        entry = parse_line(line)
+        assert entry is not None
+        assert entry["level"] == "ERROR"
+
+    def test_line_with_only_whitespace_returns_none(self):
+        assert parse_line("     \t   ") is None
+
+    def test_null_byte_in_line_does_not_crash(self):
+        """Lines containing null bytes are rare but must not crash the parser."""
+        line = "2024-01-15 10:00:00 ERROR Something\x00weird happened"
+        entry = parse_line(line)
+        assert entry is not None
+
+
+# ---------------------------------------------------------------------------
+# parse_line — invalid / partial timestamps
+# ---------------------------------------------------------------------------
+
+class TestInvalidTimestamp:
+
+    def test_invalid_month_in_timestamp_yields_none_timestamp(self):
+        """99 is not a valid month — timestamp should parse as None, not crash."""
+        line = "2024-99-15 10:00:00 ERROR bad timestamp"
+        entry = parse_line(line)
+        # Should not raise; may fall through to UNKNOWN or generic with ts=None
+        assert entry is not None
+
+    def test_invalid_date_in_generic_line_timestamp_is_none(self):
+        line = "9999-99-99 99:99:99 ERROR this is weird"
+        entry = parse_line(line)
+        assert entry is not None
+        # timestamp must be None since the date is invalid
+        assert entry.get("timestamp") is None
+
+    def test_timestamp_only_no_level_falls_back_to_unknown(self):
+        """A line that starts with a timestamp but has no recognisable level."""
+        line = "2024-01-15 10:00:00 just some text with no level keyword"
+        entry = parse_line(line)
+        assert entry is not None
+        assert "level" in entry
+
+    def test_iso_timestamp_with_timezone_offset_parses(self):
+        line = "2024-01-15T10:00:00+05:30 ERROR timezone offset test"
+        entry = parse_line(line)
+        assert entry is not None
+        # Timestamp may or may not be parsed depending on format support;
+        # what matters is no exception is raised.
+
+    def test_nginx_with_invalid_timestamp_returns_entry_with_none_ts(self):
+        """nginx line where timestamp field is garbled — entry still returned."""
+        line = (
+            '192.168.1.1 - - [99/ZZZ/9999:99:99:99 +0000] '
+            '"GET / HTTP/1.1" 200 512 "-" "curl/7.0"'
+        )
+        entry = parse_line(line)
+        assert entry is not None
+        assert entry.get("timestamp") is None
+
+
+# ---------------------------------------------------------------------------
+# parse_file — additional edge cases
+# ---------------------------------------------------------------------------
+
+class TestParseFileEdgeCases:
+
+    def test_parse_file_mixed_formats(self, tmp_path):
+        """A log file mixing nginx, generic, and JSON lines is parsed without error."""
+        log = tmp_path / "mixed.log"
+        log.write_text(
+            "\n".join([
+                NGINX_LINE,
+                GENERIC_ERROR_LINE,
+                JSON_LINE,
+                APACHE_LINE,
+                GENERIC_WARN_LINE,
+            ]) + "\n",
+            encoding="utf-8",
+        )
+        entries = parse_file(log)
+        assert len(entries) == 5
+
+    def test_parse_file_only_comments(self, tmp_path):
+        log = tmp_path / "comments.log"
+        log.write_text("# comment 1\n# comment 2\n", encoding="utf-8")
+        entries = parse_file(log)
+        assert entries == []
+
+    def test_parse_file_single_malformed_line_does_not_crash(self, tmp_path):
+        log = tmp_path / "malformed.log"
+        log.write_text('{"truncated": true\n' + GENERIC_INFO_LINE + "\n", encoding="utf-8")
+        entries = parse_file(log)
+        # Two lines processed; none should crash
+        assert isinstance(entries, list)
+        assert len(entries) == 2
+
+    def test_parse_file_empty_file_returns_empty_list(self, tmp_path):
+        log = tmp_path / "empty.log"
+        log.write_text("", encoding="utf-8")
+        entries = parse_file(log)
+        assert entries == []

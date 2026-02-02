@@ -28,11 +28,14 @@ from logsense import version as __version__
 from logsense.parser import detect_format, parse_file
 from logsense.clustering import cluster_errors
 from logsense.anomaly import detect_anomalies
-from logsense.alerts import send_slack_alert
+from logsense.alerts import send_slack_alert, NO_WEBHOOK
 
 load_dotenv()
 
 console = Console()
+
+# Sentinel returned by send_slack_alert when no webhook is configured
+_NO_WEBHOOK = NO_WEBHOOK
 
 _LEVEL_STYLES = {
     "ERROR": "bold red",
@@ -109,11 +112,41 @@ def cli() -> None:
     type=click.IntRange(1, 1440),
     help="Size of each anomaly-detection time window (minutes).",
 )
+@click.option(
+    "--threshold",
+    default=0.72,
+    show_default=True,
+    type=click.FloatRange(0.5, 0.99),
+    metavar="FLOAT",
+    help="Jaccard similarity threshold for clustering (0.5–0.99).",
+)
+@click.option(
+    "--level",
+    "filter_level",
+    default=None,
+    type=click.Choice(
+        ["DEBUG", "INFO", "NOTICE", "WARNING", "WARN", "ERROR", "CRITICAL", "FATAL", "TRACE"],
+        case_sensitive=False,
+    ),
+    metavar="LEVEL",
+    help="Filter output and stats to a specific severity level.",
+)
+@click.option(
+    "--limit",
+    default=20,
+    show_default=True,
+    type=click.IntRange(1),
+    metavar="INT",
+    help="Maximum number of error pattern clusters to display.",
+)
 def analyse(
     file: Path,
     log_format: str,
     slack_webhook: Optional[str],
     window_minutes: int,
+    threshold: float,
+    filter_level: Optional[str],
+    limit: int,
 ) -> None:
     """Run a full analysis pipeline on FILE and display a Rich dashboard."""
 
@@ -123,7 +156,14 @@ def analyse(
 
     # ---- Parse ----
     with console.status(f"[cyan]Parsing [bold]{file.name}[/bold]…[/cyan]"):
-        entries = parse_file(file)
+        try:
+            entries = parse_file(file)
+        except OSError as exc:
+            raise click.ClickException(f"Cannot read '{file}': {exc}") from exc
+        except UnicodeDecodeError as exc:
+            raise click.ClickException(
+                f"'{file}' contains data that could not be decoded as UTF-8: {exc}"
+            ) from exc
 
     if not entries:
         console.print(f"[yellow]No log entries found in {file}.[/yellow]")
@@ -131,6 +171,16 @@ def analyse(
 
     detected = detect_format([e["raw"] for e in entries[:40]])
     actual_format = detected if log_format == "auto" else log_format
+
+    # ---- Apply --level filter ----
+    normalised_filter = filter_level.upper() if filter_level else None
+    if normalised_filter:
+        entries = [e for e in entries if e.get("level", "").upper() == normalised_filter]
+        if not entries:
+            console.print(
+                f"[yellow]No entries with level '{normalised_filter}' found in {file}.[/yellow]"
+            )
+            sys.exit(0)
 
     # ---- Aggregate basic stats ----
     total = len(entries)
@@ -143,6 +193,16 @@ def analyse(
     time_min = min(e["timestamp"] for e in timed) if timed else None
     time_max = max(e["timestamp"] for e in timed) if timed else None
 
+    # ---- Window span edge-case check ----
+    if timed and time_min and time_max:
+        file_span_minutes = (time_max - time_min).total_seconds() / 60
+        if window_minutes > file_span_minutes and file_span_minutes > 0:
+            console.print(
+                f"[yellow]Warning: --window-minutes ({window_minutes}m) is larger than the "
+                f"total log time span ({file_span_minutes:.1f}m). "
+                "Anomaly detection may return no results.[/yellow]"
+            )
+
     level_counts: dict[str, int] = {}
     for e in entries:
         lvl = e.get("level", "UNKNOWN").upper()
@@ -150,7 +210,7 @@ def analyse(
 
     # ---- Cluster errors ----
     with console.status("[cyan]Clustering error patterns…[/cyan]"):
-        clusters = cluster_errors(entries)
+        clusters = cluster_errors(entries, similarity_threshold=threshold)
 
     # ---- Detect anomalies ----
     with console.status(f"[cyan]Detecting anomalies (window={window_minutes}m)…[/cyan]"):
@@ -162,8 +222,9 @@ def analyse(
 
     # -- Summary panel --
     rate_style = _error_rate_colour(error_rate)
+    level_suffix = f"  [dim](filtered: {normalised_filter})[/dim]" if normalised_filter else ""
     summary_lines = [
-        f"[bold]File:[/bold]          {file}",
+        f"[bold]File:[/bold]          {file}{level_suffix}",
         f"[bold]Format:[/bold]        {actual_format}",
         f"[bold]Total entries:[/bold] {total:,}",
         f"[bold]Error count:[/bold]   [{rate_style}]{error_count:,}[/{rate_style}]",
@@ -209,8 +270,10 @@ def analyse(
 
     # -- Top error patterns table --
     if clusters:
+        display_clusters = clusters[:limit]
+        title_suffix = f" (showing {len(display_clusters)} of {len(clusters)})" if len(clusters) > limit else ""
         pat_table = Table(
-            title="Top Error Patterns",
+            title=f"Top Error Patterns{title_suffix}",
             box=box.ROUNDED,
             border_style="dim",
             show_header=True,
@@ -222,7 +285,7 @@ def analyse(
         pat_table.add_column("First seen", min_width=19)
         pat_table.add_column("Last seen", min_width=19)
 
-        for idx, cluster in enumerate(clusters[:15], start=1):
+        for idx, cluster in enumerate(display_clusters, start=1):
             pat_table.add_row(
                 str(idx),
                 f"[bold]{cluster['count']:,}[/bold]",
@@ -272,25 +335,33 @@ def analyse(
 
         # -- Slack alert --
         webhook = slack_webhook or os.getenv("SLACK_WEBHOOK_URL", "")
-        if webhook:
-            top_pattern = clusters[0]["pattern"] if clusters else ""
-            summary_payload = {
-                "file_path": str(file),
-                "total_lines": total,
-                "error_count": error_count,
-                "error_rate": error_rate,
-                "format": actual_format,
-                "top_pattern": top_pattern,
-            }
-            with console.status("[cyan]Sending Slack alert…[/cyan]"):
-                ok = send_slack_alert(webhook, anomalies, summary_payload)
-            if ok:
-                console.print("[green]Slack alert sent.[/green]")
-            else:
-                console.print("[red]Failed to send Slack alert (check webhook URL / network).[/red]")
-        else:
+        top_pattern = clusters[0]["pattern"] if clusters else ""
+        summary_payload = {
+            "file_path": str(file),
+            "total_lines": total,
+            "error_count": error_count,
+            "error_rate": error_rate,
+            "format": actual_format,
+            "top_pattern": top_pattern,
+        }
+        with console.status("[cyan]Sending Slack alert…[/cyan]"):
+            result = send_slack_alert(webhook, anomalies, summary_payload)
+
+        if result is _NO_WEBHOOK:
+            # Webhook not configured — silent skip, just print a hint
             console.print(
                 "[dim]Tip: pass --slack-webhook URL or set SLACK_WEBHOOK_URL to receive Slack alerts.[/dim]"
+            )
+        elif result is True:
+            console.print("[green]Slack alert sent.[/green]")
+        else:
+            # Webhook was configured but the HTTP request failed
+            click.echo(
+                click.style(
+                    "Warning: Slack alert failed (check webhook URL / network).",
+                    fg="red",
+                ),
+                err=True,
             )
     else:
         console.print("[green]No anomalies detected.[/green]")
@@ -312,7 +383,14 @@ def stats(file: Path) -> None:
     console.print()
 
     with console.status(f"[cyan]Reading [bold]{file.name}[/bold]…[/cyan]"):
-        entries = parse_file(file)
+        try:
+            entries = parse_file(file)
+        except OSError as exc:
+            raise click.ClickException(f"Cannot read '{file}': {exc}") from exc
+        except UnicodeDecodeError as exc:
+            raise click.ClickException(
+                f"'{file}' contains data that could not be decoded as UTF-8: {exc}"
+            ) from exc
 
     if not entries:
         console.print(f"[yellow]No log entries found in {file}.[/yellow]")
@@ -370,4 +448,3 @@ def stats(file: Path) -> None:
 
 if __name__ == "__main__":
     cli()
-# log filter: --level flag to filter by severity in stats
