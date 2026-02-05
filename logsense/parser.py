@@ -105,7 +105,7 @@ def parse_line(line: str) -> Optional[dict]:
     Returns None if the line is blank or a comment.
     """
     line = line.rstrip("\n\r")
-    if not line or line.startswith("#"):
+    if not line.strip() or line.startswith("#"):
         return None
 
     # --- JSON ---
@@ -196,9 +196,9 @@ def detect_format(sample_lines: list[str]) -> str:
                 pass
 
         # nginx has referer + user-agent fields (7+ space-separated tokens after status)
-        if _NGINX_PATTERN.match(line):
-            m = _NGINX_PATTERN.match(line)
-            if m and m.group("http_user_agent"):
+        m = _NGINX_PATTERN.match(line)
+        if m:
+            if m.group("http_user_agent"):
                 scores["nginx"] += 2
             else:
                 scores["apache"] += 1

@@ -18,8 +18,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-
-_ERROR_LEVELS = {"ERROR", "CRITICAL", "FATAL", "WARNING", "WARN"}
+from logsense.constants import ERROR_LEVELS as _ERROR_LEVELS
 
 
 # ---------------------------------------------------------------------------

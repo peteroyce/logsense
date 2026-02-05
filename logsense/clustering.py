@@ -13,6 +13,8 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Optional
 
+from logsense.constants import ERROR_LEVELS
+
 
 # ---------------------------------------------------------------------------
 # Normalisation regexes — applied in order
@@ -36,6 +38,8 @@ _SUBSTITUTIONS: list[tuple[re.Pattern, str]] = [
     # Quoted strings
     (re.compile(r'"[^"]{4,}"'), "<STR>"),
     (re.compile(r"'[^']{4,}'"), "<STR>"),
+    # Linux/Unix block device identifiers (sda, sdb, nvme0n1, vda, xvdb, etc.)
+    (re.compile(r'\b(?:sd|hd|vd|xvd)[a-z][0-9]?\b|nvme\d+n\d+(?:p\d+)?\b', re.IGNORECASE), "<DEVICE>"),
     # Numbers with units (e.g. 512ms, 1.5s, 404)
     (re.compile(r'\b\d+(?:\.\d+)?(?:ms|s|kb|mb|gb|b)?\b', re.IGNORECASE), "<NUM>"),
     # Collapse repeated whitespace
@@ -45,10 +49,10 @@ _SUBSTITUTIONS: list[tuple[re.Pattern, str]] = [
 
 def _make_template(message: str) -> str:
     """Return a normalised template string for *message*."""
-    tmpl = message
+    tmpl = message.lower()
     for pattern, replacement in _SUBSTITUTIONS:
         tmpl = pattern.sub(replacement, tmpl)
-    return tmpl.strip().lower()
+    return tmpl.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -108,7 +112,7 @@ def _merge_similar_templates(
 # Public API
 # ---------------------------------------------------------------------------
 
-_ERROR_LEVELS = {"ERROR", "CRITICAL", "FATAL", "WARNING", "WARN"}
+_ERROR_LEVELS = ERROR_LEVELS
 
 
 def cluster_errors(
