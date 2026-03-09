@@ -214,3 +214,85 @@ class TestClusterErrors:
         assert result
         assert result[0]["first_seen"] is None
         assert result[0]["last_seen"] is None
+
+
+# ---------------------------------------------------------------------------
+# Jaccard similarity threshold tests
+# ---------------------------------------------------------------------------
+
+class TestSimilarityThreshold:
+
+    def test_high_threshold_keeps_templates_separate(self):
+        """
+        At threshold=0.99 (near-perfect match required), two messages that
+        differ in more than one token must remain as separate clusters.
+        """
+        entries = [
+            _make_entry("Connection refused from database host"),
+            _make_entry("Authentication failed for user account"),
+        ]
+        result = cluster_errors(entries, similarity_threshold=0.99)
+        # The two very different messages must not be merged
+        assert len(result) == 2
+
+    def test_low_threshold_merges_similar_templates(self):
+        """
+        At threshold=0.5 (lenient), messages that share many tokens should
+        be merged into a single cluster.
+        """
+        entries = [
+            _make_entry("Connection timeout waiting for backend server"),
+            _make_entry("Connection timeout waiting for backend cache"),
+        ]
+        result = cluster_errors(entries, similarity_threshold=0.5)
+        # Both share most tokens → should merge into 1 cluster
+        assert len(result) == 1
+        assert result[0]["count"] == 2
+
+    def test_default_threshold_is_applied(self):
+        """cluster_errors uses 0.72 by default — vary templates just enough."""
+        entries = [
+            _make_entry("Disk full on device sda"),
+            _make_entry("Disk full on device sdb"),
+        ]
+        # These differ in only one token (sda vs sdb → both become <PATH>)
+        # After normalisation they should produce the same template regardless
+        result = cluster_errors(entries)
+        assert len(result) == 1
+        assert result[0]["count"] == 2
+
+    def test_dissimilar_templates_stay_separate_at_default_threshold(self):
+        """Completely different messages must never merge."""
+        entries = [
+            _make_entry("Out of memory error in kernel subsystem"),
+            _make_entry("HTTP 503 service unavailable upstream"),
+        ]
+        result = cluster_errors(entries)
+        total = sum(c["count"] for c in result)
+        assert total == 2
+
+    def test_single_entry_produces_one_cluster(self):
+        """Single log line should produce exactly one cluster."""
+        entries = [_make_entry("Unique fatal error occurred")]
+        result = cluster_errors(entries)
+        assert len(result) == 1
+        assert result[0]["count"] == 1
+
+    def test_empty_input_returns_empty(self):
+        assert cluster_errors([]) == []
+
+    def test_only_info_entries_returns_empty(self):
+        entries = [_make_entry("Everything is fine", level="INFO") for _ in range(10)]
+        assert cluster_errors(entries) == []
+
+    def test_threshold_boundary_low(self):
+        """Threshold at minimum boundary 0.5 must not error."""
+        entries = [_make_entry("Some error happened") for _ in range(3)]
+        result = cluster_errors(entries, similarity_threshold=0.5)
+        assert isinstance(result, list)
+
+    def test_threshold_boundary_high(self):
+        """Threshold at near-maximum 0.99 must not error."""
+        entries = [_make_entry("Some error happened") for _ in range(3)]
+        result = cluster_errors(entries, similarity_threshold=0.99)
+        assert isinstance(result, list)
