@@ -29,6 +29,7 @@ from logsense.parser import detect_format, parse_file
 from logsense.clustering import cluster_errors
 from logsense.anomaly import detect_anomalies
 from logsense.alerts import send_slack_alert, NO_WEBHOOK
+from logsense.constants import ERROR_LEVELS as _ERROR_LEVELS
 
 load_dotenv()
 
@@ -184,8 +185,7 @@ def analyse(
 
     # ---- Aggregate basic stats ----
     total = len(entries)
-    error_levels = {"ERROR", "CRITICAL", "FATAL", "WARNING", "WARN"}
-    errors = [e for e in entries if e.get("level", "").upper() in error_levels]
+    errors = [e for e in entries if e.get("level", "").upper() in _ERROR_LEVELS]
     error_count = len(errors)
     error_rate = error_count / total if total else 0.0
 
@@ -397,8 +397,7 @@ def stats(file: Path) -> None:
         sys.exit(0)
 
     total = len(entries)
-    error_levels = {"ERROR", "CRITICAL", "FATAL", "WARNING", "WARN"}
-    error_count = sum(1 for e in entries if e.get("level", "").upper() in error_levels)
+    error_count = sum(1 for e in entries if e.get("level", "").upper() in _ERROR_LEVELS)
     error_rate = error_count / total if total else 0.0
     rate_style = _error_rate_colour(error_rate)
 
