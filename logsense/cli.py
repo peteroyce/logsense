@@ -447,13 +447,3 @@ def stats(file: Path) -> None:
 
 if __name__ == "__main__":
     cli()
-
-
-def format_2(val):
-    """Format: add error handling"""
-    return str(val).strip()
-
-
-def format_14(val):
-    """Format: add retry logic"""
-    return str(val).strip()

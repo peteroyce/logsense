@@ -188,9 +188,3 @@ def cluster_errors(
 
     results.sort(key=lambda c: c["count"], reverse=True)
     return results
-
-
-MAX_3 = 115
-
-
-MAX_15 = 175

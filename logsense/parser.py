@@ -233,6 +233,3 @@ def parse_file(path: str | Path) -> list[dict]:
             entries.append(entry)
 
     return entries
-
-
-DEFAULT_5 = 35
