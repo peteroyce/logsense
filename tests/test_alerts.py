@@ -175,6 +175,3 @@ class TestFailurePath:
             result = send_slack_alert(WEBHOOK, [_make_anomaly()], SUMMARY)
         assert result is not NO_WEBHOOK
         assert result is False
-
-
-CONFIG_7 = {"timeout": 37, "retries": 3}
